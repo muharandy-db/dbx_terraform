@@ -11,8 +11,8 @@ terraform {
 }
 
 provider "aws" {
-  region = var.region
-  profile = "<your-aws-profile-name>"  # Replace with your AWS CLI profile name
+  region  = var.region
+  profile = var.aws_profile
 }
 
 // initialize provider in "MWS" mode to provision new workspace

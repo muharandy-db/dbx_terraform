@@ -1,6 +1,7 @@
 variable "client_id" {}
 variable "client_secret" {}
 variable "databricks_account_id" {}
+variable "aws_profile" {}
 
 variable "tags" {
   default = {}

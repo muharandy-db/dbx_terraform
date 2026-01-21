@@ -44,7 +44,7 @@ provider "aws" {
 2. Navigate to **User management** > **Service principals**
 3. Click **Add service principal**
 4. Note the **Client ID** (Application ID)
-5. Generate a **Client Secret** and save it securely
+5. Generate a **Client Secret** in the "Credentials & secrets" tab and save it securely
 6. Grant the service principal **Account Admin** role
 
 ### Step 3: Get Databricks Account ID

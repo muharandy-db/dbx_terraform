@@ -22,7 +22,6 @@ resource "aws_iam_role_policy" "this" {
 
 resource "databricks_mws_credentials" "this" {
   provider         = databricks.mws
-  account_id       = var.databricks_account_id
   role_arn         = aws_iam_role.cross_account_role.arn
   credentials_name = "${local.prefix}-creds"
   depends_on       = [aws_iam_role_policy.this]
