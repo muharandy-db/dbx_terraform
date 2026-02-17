@@ -20,11 +20,17 @@ resource "aws_iam_role_policy" "this" {
   policy = data.databricks_aws_crossaccount_policy.this.json
 }
 
+# Wait for IAM changes to propagate before registering with Databricks
+resource "time_sleep" "wait_for_iam_propagation" {
+  depends_on      = [aws_iam_role_policy.this]
+  create_duration = "15s"
+}
+
 resource "databricks_mws_credentials" "this" {
   provider         = databricks.mws
   role_arn         = aws_iam_role.cross_account_role.arn
   credentials_name = "${local.prefix}-creds"
-  depends_on       = [aws_iam_role_policy.this]
+  depends_on       = [time_sleep.wait_for_iam_propagation]
 }
 
 data "aws_availability_zones" "available" {}
