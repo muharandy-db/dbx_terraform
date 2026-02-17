@@ -185,3 +185,163 @@ resource "databricks_mws_workspaces" "this" {
 output "databricks_host" {
   value = databricks_mws_workspaces.this.workspace_url
 }
+
+# Unity Catalog Storage Setup
+
+data "aws_caller_identity" "current" {}
+
+resource "aws_s3_bucket" "unity_catalog" {
+  bucket        = "${local.prefix}-unity-catalog"
+  force_destroy = true
+  tags = merge(var.tags, {
+    Name = "${local.prefix}-unity-catalog"
+  })
+}
+
+resource "aws_s3_bucket_server_side_encryption_configuration" "unity_catalog" {
+  bucket = aws_s3_bucket.unity_catalog.bucket
+
+  rule {
+    apply_server_side_encryption_by_default {
+      sse_algorithm = "AES256"
+    }
+  }
+}
+
+resource "aws_s3_bucket_public_access_block" "unity_catalog" {
+  bucket                  = aws_s3_bucket.unity_catalog.id
+  block_public_acls       = true
+  block_public_policy     = true
+  ignore_public_acls      = true
+  restrict_public_buckets = true
+  depends_on              = [aws_s3_bucket.unity_catalog]
+}
+
+resource "aws_s3_bucket_versioning" "unity_catalog" {
+  bucket = aws_s3_bucket.unity_catalog.id
+  versioning_configuration {
+    status = "Disabled"
+  }
+}
+
+# IAM Role for Unity Catalog - created first without self-reference
+resource "aws_iam_role" "unity_catalog" {
+  name = "${local.prefix}-unity-catalog-role"
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Principal = {
+          AWS = "arn:aws:iam::414351767826:role/unity-catalog-prod-UCMasterRole-14S5ZJVKOTYTL"
+        }
+        Action = "sts:AssumeRole"
+        Condition = {
+          StringEquals = {
+            "sts:ExternalId" = var.databricks_account_id
+          }
+        }
+      }
+    ]
+  })
+  tags = var.tags
+
+  lifecycle {
+    ignore_changes = [assume_role_policy]
+  }
+}
+
+# Update trust policy to add self-assuming capability (required since Jan 2025)
+resource "aws_iam_role_policy" "unity_catalog_self_assume" {
+  name = "${local.prefix}-unity-catalog-self-assume"
+  role = aws_iam_role.unity_catalog.id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect   = "Allow"
+        Action   = "sts:AssumeRole"
+        Resource = aws_iam_role.unity_catalog.arn
+      }
+    ]
+  })
+}
+
+# Wait for IAM role to propagate before updating trust policy
+resource "time_sleep" "wait_for_iam_role" {
+  depends_on      = [aws_iam_role.unity_catalog]
+  create_duration = "15s"
+}
+
+# Update the assume role policy after role is created to include self-reference
+resource "terraform_data" "update_unity_catalog_trust_policy" {
+  depends_on = [time_sleep.wait_for_iam_role]
+
+  provisioner "local-exec" {
+    command = <<-EOT
+      aws iam update-assume-role-policy \
+        --role-name ${aws_iam_role.unity_catalog.name} \
+        --policy-document '{
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Effect": "Allow",
+              "Principal": {
+                "AWS": [
+                  "arn:aws:iam::414351767826:role/unity-catalog-prod-UCMasterRole-14S5ZJVKOTYTL",
+                  "${aws_iam_role.unity_catalog.arn}"
+                ]
+              },
+              "Action": "sts:AssumeRole",
+              "Condition": {
+                "StringEquals": {
+                  "sts:ExternalId": "${var.databricks_account_id}"
+                }
+              }
+            }
+          ]
+        }' \
+        --profile ${var.aws_profile}
+    EOT
+  }
+}
+
+resource "aws_iam_role_policy" "unity_catalog_s3" {
+  name = "${local.prefix}-unity-catalog-s3-policy"
+  role = aws_iam_role.unity_catalog.id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Action = [
+          "s3:GetObject",
+          "s3:PutObject",
+          "s3:DeleteObject",
+          "s3:ListBucket",
+          "s3:GetBucketLocation",
+          "s3:ListBucketMultipartUploads",
+          "s3:ListMultipartUploadParts",
+          "s3:AbortMultipartUpload"
+        ]
+        Resource = [
+          aws_s3_bucket.unity_catalog.arn,
+          "${aws_s3_bucket.unity_catalog.arn}/*"
+        ]
+        Effect = "Allow"
+      },
+      {
+        Action   = ["sts:AssumeRole"]
+        Resource = aws_iam_role.unity_catalog.arn
+        Effect   = "Allow"
+      }
+    ]
+  })
+}
+
+output "unity_catalog_bucket" {
+  value = aws_s3_bucket.unity_catalog.bucket
+}
+
+output "unity_catalog_iam_role_arn" {
+  value = aws_iam_role.unity_catalog.arn
+}
